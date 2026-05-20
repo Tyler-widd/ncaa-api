@@ -89,6 +89,18 @@ function delay(ms: number) {
   });
 }
 
+interface ScheduleDateEntry {
+  contestDate?: string;
+}
+
+interface ScheduleDatesResponse {
+  data?: {
+    schedules?: {
+      games?: ScheduleDateEntry[];
+    };
+  };
+}
+
 async function fetchSeasonDates(sport: string, division: string, seasonYear: number) {
   const sportData = newCodesBySport[sport as keyof typeof newCodesBySport];
   if (!sportData) {
@@ -96,6 +108,12 @@ async function fetchSeasonDates(sport: string, division: string, seasonYear: num
   }
 
   const divisionCode = getDivisionCode(sport, division);
+  if (typeof sportData.code !== "string" || sportData.code.length === 0) {
+    throw new Error(`Unsupported scoreboard sport code for ${sport}`);
+  }
+  if (typeof divisionCode !== "number") {
+    throw new Error(`Unsupported division code for ${sport}/${division}`);
+  }
   const extensions = encodeURIComponent(
     JSON.stringify({
       persistedQuery: {
@@ -119,9 +137,9 @@ async function fetchSeasonDates(sport: string, division: string, seasonYear: num
     throw new Error(`Failed to fetch schedule dates (${response.status})`);
   }
 
-  const json = await response.json();
-  const rawDates: string[] = (json?.data?.schedules?.games ?? [])
-    .map((entry: { contestDate?: string }) => entry.contestDate)
+  const json = (await response.json()) as ScheduleDatesResponse;
+  const rawDates: string[] = (json.data?.schedules?.games ?? [])
+    .map((entry) => entry.contestDate)
     .filter((value: string | undefined): value is string => typeof value === "string");
 
   const dates = rawDates
@@ -148,6 +166,12 @@ async function fetchGamesForDate(
   }
 
   const divisionCode = getDivisionCode(sport, division);
+  if (typeof sportData.code !== "string" || sportData.code.length === 0) {
+    throw new Error(`Unsupported scoreboard sport code for ${sport}`);
+  }
+  if (typeof divisionCode !== "number") {
+    throw new Error(`Unsupported division code for ${sport}/${division}`);
+  }
   const isFootball = sportData.code === "MFB";
 
   if (isFootball) {

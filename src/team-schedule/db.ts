@@ -1,12 +1,10 @@
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { Database } from "bun:sqlite";
-import type { GameRecord, TeamRecord } from "./types";
+import type { GameRecord, TeamRecord, TeamScheduleGame } from "./types";
 
 const schema = `
 PRAGMA foreign_keys = ON;
-
-DROP TABLE IF EXISTS team_schedule_games;
 
 CREATE TABLE IF NOT EXISTS sports (
   id INTEGER PRIMARY KEY,
@@ -20,17 +18,22 @@ CREATE TABLE IF NOT EXISTS teams (
 );
 
 CREATE TABLE IF NOT EXISTS games (
-  game_id INTEGER PRIMARY KEY,
+  id INTEGER PRIMARY KEY,
+  game_id INTEGER NOT NULL,
   sport_id INTEGER NOT NULL,
   division TEXT NOT NULL,
   season INTEGER NOT NULL,
   start_unix INTEGER NOT NULL,
   home_team_id INTEGER NOT NULL,
   away_team_id INTEGER NOT NULL,
+  UNIQUE (sport_id, division, season, game_id),
   FOREIGN KEY (sport_id) REFERENCES sports(id),
   FOREIGN KEY (home_team_id) REFERENCES teams(id),
   FOREIGN KEY (away_team_id) REFERENCES teams(id)
 );
+
+CREATE INDEX IF NOT EXISTS idx_games_game_id
+ON games (game_id);
 
 CREATE INDEX IF NOT EXISTS idx_games_home_lookup
 ON games (sport_id, season, division, home_team_id, start_unix);
@@ -38,6 +41,72 @@ ON games (sport_id, season, division, home_team_id, start_unix);
 CREATE INDEX IF NOT EXISTS idx_games_away_lookup
 ON games (sport_id, season, division, away_team_id, start_unix);
 `;
+
+interface IdRow {
+  id: number;
+}
+
+interface TeamIdRow {
+  id: number;
+  slug: string;
+}
+
+interface TeamScheduleRow {
+  game_id: number;
+  start_unix: number;
+  home: string;
+  home_slug: string;
+  away: string;
+  away_slug: string;
+}
+
+function migrateGamesTable(db: Database) {
+  const columns = db
+    .query("PRAGMA table_info(games)")
+    .all() as Array<{ name: string; pk: number }>;
+
+  if (columns.length === 0) {
+    return;
+  }
+
+  const hasIdColumn = columns.some((column) => column.name === "id");
+  const gameIdIsPrimaryKey = columns.some((column) => column.name === "game_id" && column.pk === 1);
+
+  if (hasIdColumn && !gameIdIsPrimaryKey) {
+    return;
+  }
+
+  db.exec("BEGIN TRANSACTION;");
+  try {
+    db.exec("ALTER TABLE games RENAME TO games_old;");
+    db.exec(`
+      CREATE TABLE games (
+        id INTEGER PRIMARY KEY,
+        game_id INTEGER NOT NULL,
+        sport_id INTEGER NOT NULL,
+        division TEXT NOT NULL,
+        season INTEGER NOT NULL,
+        start_unix INTEGER NOT NULL,
+        home_team_id INTEGER NOT NULL,
+        away_team_id INTEGER NOT NULL,
+        UNIQUE (sport_id, division, season, game_id),
+        FOREIGN KEY (sport_id) REFERENCES sports(id),
+        FOREIGN KEY (home_team_id) REFERENCES teams(id),
+        FOREIGN KEY (away_team_id) REFERENCES teams(id)
+      );
+    `);
+    db.exec(`
+      INSERT OR REPLACE INTO games (game_id, sport_id, division, season, start_unix, home_team_id, away_team_id)
+      SELECT game_id, sport_id, division, season, start_unix, home_team_id, away_team_id
+      FROM games_old;
+    `);
+    db.exec("DROP TABLE games_old;");
+    db.exec("COMMIT;");
+  } catch (error) {
+    db.exec("ROLLBACK;");
+    throw error;
+  }
+}
 
 export function getDefaultDbPath() {
   return resolve(process.cwd(), "data", "team-schedules.sqlite");
@@ -47,12 +116,13 @@ export function openTeamScheduleDb(dbPath = getDefaultDbPath()) {
   mkdirSync(dirname(dbPath), { recursive: true });
   const db = new Database(dbPath, { create: true, strict: true });
   db.exec(schema);
+  migrateGamesTable(db);
   return db;
 }
 
 export function ensureSport(db: Database, slug: string) {
   db.query("INSERT INTO sports (slug) VALUES (?) ON CONFLICT (slug) DO NOTHING").run(slug);
-  const row = db.query("SELECT id FROM sports WHERE slug = ?").get(slug) as { id: number } | null;
+  const row = db.query("SELECT id FROM sports WHERE slug = ?").get(slug) as IdRow | null;
   if (!row) {
     throw new Error(`Could not resolve sport id for ${slug}`);
   }
@@ -94,7 +164,7 @@ function getTeamIds(db: Database, slugs: string[]) {
   const placeholders = uniqueSlugs.map(() => "?").join(", ");
   const rows = db
     .query(`SELECT id, slug FROM teams WHERE slug IN (${placeholders})`)
-    .all(...uniqueSlugs) as Array<{ id: number; slug: string }>;
+    .all(...uniqueSlugs) as TeamIdRow[];
 
   const teamIds = new Map<string, number>();
   for (const row of rows) {
@@ -123,10 +193,7 @@ export function upsertGames(db: Database, sportId: number, games: GameRecord[]) 
       home_team_id,
       away_team_id
     ) VALUES (?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT (game_id) DO UPDATE SET
-      sport_id = excluded.sport_id,
-      division = excluded.division,
-      season = excluded.season,
+    ON CONFLICT (sport_id, division, season, game_id) DO UPDATE SET
       start_unix = excluded.start_unix,
       home_team_id = excluded.home_team_id,
       away_team_id = excluded.away_team_id`
@@ -155,4 +222,71 @@ export function upsertGames(db: Database, sportId: number, games: GameRecord[]) 
 
   tx(games);
   return games.length;
+}
+
+export function getTeamScheduleGames(
+  db: Database,
+  schoolSlug: string,
+  sportSlug: string,
+  division: string,
+  season: number
+): TeamScheduleGame[] {
+  const sportRow = db.query("SELECT id FROM sports WHERE slug = ?").get(sportSlug) as IdRow | null;
+  if (!sportRow) {
+    return [];
+  }
+
+  const teamRow = db.query("SELECT id FROM teams WHERE slug = ?").get(schoolSlug) as IdRow | null;
+  if (!teamRow) {
+    return [];
+  }
+
+  const rows = db
+    .query(
+      `SELECT
+        g.game_id,
+        g.start_unix,
+        ht.pretty_name AS home,
+        ht.slug AS home_slug,
+        at.pretty_name AS away,
+        at.slug AS away_slug
+      FROM games g
+      JOIN teams ht ON g.home_team_id = ht.id
+      JOIN teams at ON g.away_team_id = at.id
+      WHERE g.sport_id = ?
+        AND g.season = ?
+        AND g.division = ?
+        AND g.home_team_id = ?
+
+      UNION ALL
+
+      SELECT
+        g.game_id,
+        g.start_unix,
+        ht.pretty_name AS home,
+        ht.slug AS home_slug,
+        at.pretty_name AS away,
+        at.slug AS away_slug
+      FROM games g
+      JOIN teams ht ON g.home_team_id = ht.id
+      JOIN teams at ON g.away_team_id = at.id
+      WHERE g.sport_id = ?
+        AND g.season = ?
+        AND g.division = ?
+        AND g.away_team_id = ?
+
+      ORDER BY start_unix`
+    )
+    .all(
+      sportRow.id,
+      season,
+      division,
+      teamRow.id,
+      sportRow.id,
+      season,
+      division,
+      teamRow.id
+    ) as TeamScheduleRow[];
+
+  return rows;
 }

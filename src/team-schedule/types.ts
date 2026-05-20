@@ -36,3 +36,12 @@ export interface IngestResult {
   gamesWritten: number;
   teamsUpserted: number;
 }
+
+export interface TeamScheduleGame {
+  game_id: number;
+  start_unix: number;
+  home: string;
+  home_slug: string;
+  away: string;
+  away_slug: string;
+}
