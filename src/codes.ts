@@ -31,7 +31,7 @@ export const teamStatsHashes = {
 
 export const newCodesBySport: Record<
   string,
-  { code: string; divisions: Record<string, number>; metas?: Record<string, string> }
+  { code?: string; divisions?: Record<string, number>; }
 > = {
   ////// FALL SPORTS //////
   football: {
@@ -110,6 +110,19 @@ export const newCodesBySport: Record<
       d3: 3,
     },
   },
+  bowling: {}, // only rankings supported
+  rifle: {}, // only rankings, history supported
+  fencing: {}, // only history supported
+  "gymnastics-men": {}, // only rankings, history
+  "gymnastics-women": {}, // only rankings, history
+  skiiing: {}, // only history supported
+  "swimming-men": {},
+  "swimming-women": {},
+  "trackfield-indoor-men": {},
+  "trackfield-indoor-women": {},
+  "wrestling-men": {},
+  "wrestling-women": {},
+
   ////// SPRING SPORTS //////
   baseball: {
     code: "MBA",
@@ -117,6 +130,12 @@ export const newCodesBySport: Record<
       d1: 1,
       d2: 2,
       d3: 3,
+    },
+  },
+  "beach-volleyball": {
+    code: "WSV",
+    divisions: {
+      d1: 1,
     },
   },
   "lacrosse-men": {
@@ -143,6 +162,22 @@ export const newCodesBySport: Record<
       d3: 3,
     },
   },
+  "tennis-men": {
+    code: "", // tennis does not support scoreboard API
+    divisions: {
+      d1: 1,
+      d2: 2,
+      d3: 3,
+    },
+  },
+  "tennis-women": {
+    code: "", // tennis does not support scoreboard API
+    divisions: {
+      d1: 1,
+      d2: 2,
+      d3: 3,
+    },
+  },
   "volleyball-men": {
     code: "MVB",
     divisions: {
@@ -156,6 +191,11 @@ export const newCodesBySport: Record<
       d1: 1,
     },
   },
+  "golf-men": {},
+  "golf-women": {},
+  "rowing": {},
+  "trackfield-outdoor-men": {},
+  "trackfield-outdoor-women": {},
 };
 
 /**
@@ -175,14 +215,18 @@ export const getDivisionCode = (sport: string, division: string) => {
   if (!sportData) {
     throw errNotSupported(sport, division);
   }
-  return sportData.divisions[division as keyof typeof sportData.divisions] ?? division;
+  return sportData.divisions?.[division as keyof typeof sportData.divisions] ?? division;
 };
 
 export const supportedSports = Object.keys(newCodesBySport);
 
 export const supportedDivisions = [
-  ...Object.keys(newCodesBySport.football.divisions),
-  ...Object.keys(newCodesBySport.fieldhockey.divisions),
+  "fbs",
+  "fcs",
+  "d1",
+  "d2",
+  "d3",
+  "nc", // non championship (e.g., rifle)
 ] as const;
 
 // Define division type as union of all possible division keys
@@ -239,7 +283,7 @@ export async function getScheduleBySportAndDivision(sport: string, division: Div
   if (!sportData) {
     throw errNotSupported(sport, division);
   }
-  const divisionCode = sportData.divisions[division as keyof typeof sportData.divisions];
+  const divisionCode = sportData.divisions?.[division as keyof typeof sportData.divisions];
   if (!divisionCode) {
     throw errNotSupported(sport, division);
   }
