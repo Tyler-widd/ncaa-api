@@ -39,6 +39,8 @@ export const newCodesBySport: Record<
     divisions: {
       fbs: 11,
       fcs: 12,
+      d2: 2,
+      d3: 3,
     },
   },
   fieldhockey: {
